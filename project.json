@@ -1,0 +1,30 @@
+
+{
+  "title": "BlackHole",
+  "description": "A animation of a black hole",
+  "type": "web",
+  "file": "blackhole_wallpaper.html",
+  "tags": [
+    "Space",
+    "Sci-Fi",
+    "Abstract"
+  ],
+  "properties": {
+    "quality": {
+      "type": "slider",
+      "name": "Quality",
+      "value": 1,
+      "min": 0.5,
+      "max": 1.5,
+      "step": 0.1
+    },
+    "animation_speed": {
+      "type": "slider",
+      "name": "Animation Speed",
+      "value": 1,
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    }
+  }
+}

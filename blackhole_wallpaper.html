@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Trou noir</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#000;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  const TAU = Math.PI * 2;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  let W, H, DPR, cx, cy, R, maxD;
+  let stars = [], disk = [];
+  const ripples = [];
+  const touches = new Map();          // pointerId -> {x, y, s}
+  const par = { x: 0, y: 0, tx: 0, ty: 0 };
+  let lastInput = -999, pulse = 0, t = 0;
+
+  /* ---------- Taille / init ---------- */
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = Math.floor(W * DPR); cv.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cx = W / 2; cy = H * 0.42;
+    R = Math.min(W, H) * 0.085;
+    maxD = Math.hypot(W, H) * 0.75;
+    initStars(); initDisk();
+  }
+
+  function initStars() {
+    stars = [];
+    for (let i = 0; i < 320; i++) {
+      const z = rnd(0.15, 1);
+      stars.push({
+        a: rnd(0, TAU), d: rnd(R * 1.1, maxD), z,
+        r: rnd(0.4, 1.5) * (0.5 + z),
+        ph: rnd(0, TAU), ox: 0, oy: 0, px: 0, py: 0
+      });
+    }
+  }
+
+  function initDisk() {
+    disk = [];
+    for (let i = 0; i < 1100; i++) {
+      const r = R * (1.2 + Math.pow(Math.random(), 1.7) * 2.1);
+      disk.push({
+        a: rnd(0, TAU), r,
+        sp: 0.9 / Math.sqrt(r / R),
+        size: rnd(0.5, 1.8) * (1.4 - (r / R - 1.2) * 0.12),
+        jit: rnd(0.6, 1)
+      });
+    }
+  }
+
+  /* ---------- Entrées : tactile, souris, gyroscope ---------- */
+  function pointerPos(e) { return { x: e.clientX, y: e.clientY }; }
+
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    cv.setPointerCapture?.(e.pointerId);
+    const p = pointerPos(e);
+    touches.set(e.pointerId, { x: p.x, y: p.y, s: 1 });
+    ripples.push({ x: p.x, y: p.y, t: 0, max: Math.max(W, H) * 0.45, k: 1 });
+    pulse = Math.min(pulse + 0.8, 1.6);
+    lastInput = t;
+  });
+  cv.addEventListener('pointermove', e => {
+    lastInput = t;
+    const p = pointerPos(e);
+    if (touches.has(e.pointerId)) {
+      const tc = touches.get(e.pointerId);
+      tc.x = p.x; tc.y = p.y;
+    }
+    par.tx = (p.x / W - 0.5) * 2;
+    par.ty = (p.y / H - 0.5) * 2;
+  });
+  const endTouch = e => {
+    touches.delete(e.pointerId);
+    lastInput = t;
+  };
+  cv.addEventListener('pointerup', endTouch);
+  cv.addEventListener('pointercancel', endTouch);
+  cv.addEventListener('pointerleave', endTouch);
+
+  // Gyroscope (mobile)
+  function onOrient(e) {
+    if (e.gamma == null) return;
+    lastInput = t;
+    par.tx = Math.max(-1, Math.min(1, e.gamma / 30));
+    par.ty = Math.max(-1, Math.min(1, (e.beta - 45) / 30));
+  }
+  window.addEventListener('deviceorientation', onOrient);
+  // iOS : demander la permission au premier toucher
+  cv.addEventListener('pointerdown', () => {
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function' && !window.__orientAsked) {
+      window.__orientAsked = true;
+      DeviceOrientationEvent.requestPermission().catch(() => {});
+    }
+  }, { once: true });
+
+  window.addEventListener('resize', resize);
+
+  /* ---------- Dessin ---------- */
+  function drawBackground() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const g = ctx.createRadialGradient(cx, cy, R * 0.5, cx, cy, maxD * 0.8);
+    g.addColorStop(0, 'rgba(90,40,140,0.22)');
+    g.addColorStop(0.35, 'rgba(40,15,70,0.12)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function updateAndDrawStars(dt) {
+    ctx.globalCompositeOperation = 'lighter';
+    const bx = cx + par.x * 10, by = cy + par.y * 10;
+    for (const s of stars) {
+      // Orbite képe : vitesse angulaire képlet Kepler-szerű
+      const w = 0.55 * Math.pow(R / s.d, 1.5) * (0.6 + s.z);
+      s.a += w * dt;
+      s.d -= dt * R * 0.035 * (0.5 + s.z) * (R / s.d) ** 0.4;
+
+      // Respawn quand la star tombe dans l'horizon
+      if (s.d < R * 1.05) {
+        s.d = rnd(maxD * 0.6, maxD);
+        s.a = rnd(0, TAU);
+        s.ox = s.oy = 0;
+        s.px = s.py = null;
+      }
+
+      // Effet de lentille gravitationnelle : étirement radial près du trou
+      const eff = s.d + (R * R * 0.4) / s.d;
+      const par_ox = par.x * 45 * s.z, par_oy = par.y * 45 * s.z;
+      let x = bx + Math.cos(s.a) * eff + par_ox + s.ox;
+      let y = by + Math.sin(s.a) * eff * 0.92 + par_oy + s.oy;
+
+      // Attraction tactile : les étoiles sont aspirées vers le doigt puis reviennent
+      for (const tc of touches.values()) {
+        const dx = tc.x - x, dy = tc.y - y;
+        const d2 = dx * dx + dy * dy + 900;
+        const k = (tc.s * 60 * s.z) / d2 * dt * 60;
+        s.ox += dx * k;
+        s.oy += dy * k;
+      }
+      // Ressort de retour
+      s.ox *= Math.exp(-dt * 1.6);
+      s.oy *= Math.exp(-dt * 1.6);
+
+      // Ondulation : pousse les étoiles sur le passage
+      for (const rp of ripples) {
+        const dx = x - rp.x, dy = y - rp.y;
+        const d = Math.hypot(dx, dy) + 1;
+        const band = Math.abs(d - rp.t);
+        if (band < 60) {
+          const f = (1 - band / 60) * rp.k * 6 * s.z;
+          x += (dx / d) * f;
+          y += (dy / d) * f;
+        }
+      }
+
+      // Traînée proportionnelle à la vitesse (effet "warp" près du trou)
+      const alpha = 0.35 + 0.65 * s.z * (0.7 + 0.3 * Math.sin(t * 2 + s.ph));
+      if (s.px !== null) {
+        const v = Math.hypot(x - s.px, y - s.py);
+        ctx.strokeStyle = `rgba(200,220,255,${Math.min(0.9, alpha * (v / 14))})`;
+        ctx.lineWidth = s.r * 0.9;
+        ctx.beginPath();
+        ctx.moveTo(s.px, s.py);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = `rgba(230,240,255,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(x, y, s.r, 0, TAU);
+      ctx.fill();
+      s.px = x; s.py = y;
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawDisk(dt, part) {
+    // part : 'back' (derrière l'horizon) ou 'front'
+    ctx.globalCompositeOperation = 'lighter';
+    const bx = cx + par.x * 14, by = cy + par.y * 14;
+    for (const p of disk) {
+      p.a += p.sp * dt * 0.35 * (1 + pulse * 0.6);
+      const sy = Math.sin(p.a);
+      const isFront = sy > 0;
+      if ((part === 'front') !== isFront) continue;
+      const x = bx + Math.cos(p.a) * p.r;
+      const y = by + sy * p.r * 0.3;
+      // Effet Doppler : côté qui se rapproche plus lumineux
+      const doppler = 0.55 + 0.45 * (0.5 + 0.5 * Math.cos(p.a - 0.6));
+      const heat = Math.max(0, 1 - (p.r / R - 1.2) / 2.1); // 1 = chaud
+      const hue = 25 + heat * 30;
+      const light = 50 + heat * 35;
+      const a = Math.min(1, doppler * p.jit * (0.7 + pulse * 0.25));
+      ctx.fillStyle = `hsla(${hue},100%,${light}%,${a})`;
+      const s = p.size * (0.9 + pulse * 0.2);
+      ctx.fillRect(x - s / 2, y - s / 2, s, s);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawHorizonAndLensing() {
+    const bx = cx + par.x * 14, by = cy + par.y * 14;
+
+    // Halo de lentille (additif)
+    ctx.globalCompositeOperation = 'lighter';
+    const halo = ctx.createRadialGradient(bx, by, R * 0.95, bx, by, R * (2.6 + pulse * 0.4));
+    halo.addColorStop(0, `rgba(255,190,110,${0.35 + pulse * 0.15})`);
+    halo.addColorStop(0.35, 'rgba(255,120,60,0.12)');
+    halo.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(bx, by, R * 2.8, 0, TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Horizon des événements (noir absolu)
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(bx, by, R, 0, TAU);
+    ctx.fill();
+
+    // Anneau de photons (glow + trait net)
+    ctx.globalCompositeOperation = 'lighter';
+    const glow = R * (0.1 + pulse * 0.02);
+    for (let i = 3; i >= 1; i--) {
+      ctx.strokeStyle = `rgba(255,170,90,${0.12 * i * (0.8 + pulse * 0.3)})`;
+      ctx.lineWidth = glow * i * 2.2;
+      ctx.beginPath();
+      ctx.arc(bx, by, R * 1.02, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = `rgba(255,245,230,${0.85 + pulse * 0.1})`;
+    ctx.lineWidth = Math.max(1.5, R * 0.035);
+    ctx.beginPath();
+    ctx.arc(bx, by, R * 1.02, 0, TAU);
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawRipplesAndTouches(dt) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const rp = ripples[i];
+      rp.t += dt * Math.max(W, H) * 0.9;
+      rp.k *= Math.exp(-dt * 1.8);
+      const a = Math.max(0, rp.k) * (1 - rp.t / rp.max);
+      if (a <= 0.01 || rp.t > rp.max) { ripples.splice(i, 1); continue; }
+      ctx.strokeStyle = `rgba(160,200,255,${a * 0.6})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.t, 0, TAU);
+      ctx.stroke();
+    }
+    // Point d'attraction sous le doigt
+    for (const tc of touches.values()) {
+      const g = ctx.createRadialGradient(tc.x, tc.y, 0, tc.x, tc.y, 90);
+      g.addColorStop(0, 'rgba(140,180,255,0.35)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(tc.x, tc.y, 90, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /* ---------- Boucle ---------- */
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    t += dt;
+
+    // Parallaxe : lissage, et dérive douce si aucune interaction depuis 4 s
+    if (t - lastInput > 4) {
+      par.tx = Math.sin(t * 0.17) * 0.45;
+      par.ty = Math.cos(t * 0.13) * 0.3;
+    }
+    par.x += (par.tx - par.x) * Math.min(1, dt * 4);
+    par.y += (par.ty - par.y) * Math.min(1, dt * 4);
+
+    pulse *= Math.exp(-dt * 2.2);
+
+    drawBackground();
+    updateAndDrawStars(dt);
+    drawDisk(dt, 'back');
+    drawHorizonAndLensing();
+    drawDisk(dt, 'front');
+    drawRipplesAndTouches(dt);
+
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
